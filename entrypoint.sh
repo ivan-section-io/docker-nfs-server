@@ -31,6 +31,7 @@ readonly ENV_VAR_NFS_PORT_MOUNTD='NFS_PORT_MOUNTD'
 readonly ENV_VAR_NFS_PORT='NFS_PORT'
 readonly ENV_VAR_NFS_PORT_STATD_IN='NFS_PORT_STATD_IN'
 readonly ENV_VAR_NFS_PORT_STATD_OUT='NFS_PORT_STATD_OUT'
+readonly ENV_VAR_NFS_PORT_LOCKD='NFS_PORT_LOCKD'
 readonly ENV_VAR_NFS_VERSION='NFS_VERSION'
 readonly ENV_VAR_NFS_LOG_LEVEL='NFS_LOG_LEVEL'
 
@@ -38,6 +39,7 @@ readonly DEFAULT_NFS_PORT=2049
 readonly DEFAULT_NFS_PORT_MOUNTD=32767
 readonly DEFAULT_NFS_PORT_STATD_IN=32765
 readonly DEFAULT_NFS_PORT_STATD_OUT=32766
+readonly DEFAULT_NFS_PORT_LOCKD=32764
 readonly DEFAULT_NFS_VERSION='4.2'
 
 readonly PATH_BIN_EXPORTFS='/usr/sbin/exportfs'
@@ -47,6 +49,7 @@ readonly PATH_BIN_NFSD='/usr/sbin/rpc.nfsd'
 readonly PATH_BIN_RPCBIND='/sbin/rpcbind'
 readonly PATH_BIN_RPC_SVCGSSD='/usr/sbin/rpc.svcgssd'
 readonly PATH_BIN_STATD='/sbin/rpc.statd'
+readonly PATH_BIN_CAPSH='/usr/sbin/capsh'
 
 readonly PATH_FILE_ETC_EXPORTS='/etc/exports'
 readonly PATH_FILE_ETC_IDMAPD_CONF='/etc/idmapd.conf'
@@ -69,6 +72,7 @@ readonly STATE_NFSD_PORT='nfsd_port'
 readonly STATE_MOUNTD_PORT='mountd_port'
 readonly STATE_STATD_PORT_IN='statd_port_in'
 readonly STATE_STATD_PORT_OUT='statd_port_out'
+readonly STATE_LOCKD_PORT='lockd_port'
 readonly STATE_NFS_VERSION='nfs_version'
 
 # "state" is our only global variable, which is an associative array of normalized data
@@ -273,7 +277,7 @@ is_kernel_module_loaded() {
 
 is_granted_linux_capability() {
 
-  if capsh --print | grep -Eq "^Current: = .*,?${1}(,|$)"; then
+  if ${PATH_BIN_CAPSH} --print | grep -Eq "^Current IAB: .*,?${1}(,|$)"; then
     return 0
   fi
 
@@ -383,11 +387,13 @@ init_state_ports() {
   assert_port "$ENV_VAR_NFS_PORT_MOUNTD"
   assert_port "$ENV_VAR_NFS_PORT_STATD_IN"
   assert_port "$ENV_VAR_NFS_PORT_STATD_OUT"
+  assert_port "$ENV_VAR_NFS_PORT_LOCKD"
 
   state[$STATE_NFSD_PORT]=${!ENV_VAR_NFS_PORT:-$DEFAULT_NFS_PORT}
   state[$STATE_MOUNTD_PORT]=${!ENV_VAR_NFS_PORT_MOUNTD:-$DEFAULT_NFS_PORT_MOUNTD}
   state[$STATE_STATD_PORT_IN]=${!ENV_VAR_NFS_PORT_STATD_IN:-$DEFAULT_NFS_PORT_STATD_IN}
   state[$STATE_STATD_PORT_OUT]=${!ENV_VAR_NFS_PORT_STATD_OUT:-$DEFAULT_NFS_PORT_STATD_OUT}
+  state[$STATE_LOCKD_PORT]=${!ENV_VAR_NFS_PORT_LOCKD:-$DEFAULT_NFS_PORT_LOCKD}
 }
 
 init_state_nfs_version() {
@@ -493,7 +499,13 @@ init_runtime_assertions() {
     bail 'missing CAP_SYS_ADMIN. be sure to run this image with --cap-add SYS_ADMIN or --privileged'
   fi
 
+  # check modprobe.d
+  local -r port="${state[$STATE_LOCKD_PORT]}"
+  printf "options lockd nlm_tcpport=%s\noptions lockd nlm_udpport=%s\n" "${port}" "${port}" > /etc/modprobe.d/lockd.conf
+
+
   # check kernel modules
+  assert_kernel_mod lockd
   assert_kernel_mod nfs
   assert_kernel_mod nfsd
 
@@ -530,7 +542,7 @@ boot_helper_mount() {
 boot_helper_get_version_flags() {
 
   local -r requested_version="${state[$STATE_NFS_VERSION]}"
-  local flags=('--nfs-version' "$requested_version" '--no-nfs-version' 2)
+  local flags=('--nfs-version' "$requested_version" ) # 2 isn't even understood for exclusion by modern nfsd '--no-nfs-version' 2 
 
   if ! is_nfs3_enabled; then
     flags+=('--no-nfs-version' 3)
@@ -802,6 +814,7 @@ summarize_ports() {
   local -r port_nfsd="${state[$STATE_NFSD_PORT]}"
   local -r port_mountd="${state[$STATE_MOUNTD_PORT]}"
   local -r port_statd_in="${state[$STATE_STATD_PORT_IN]}"
+  local -r port_lockd="${state[$STATE_LOCKD_PORT]}"
 
   if ! is_nfs3_enabled; then
     log "list of container ports that should be exposed: $port_nfsd (TCP)"
@@ -811,6 +824,7 @@ summarize_ports() {
     log "  $port_nfsd (TCP and UDP)"
     log "  $port_statd_in (TCP and UDP)"
     log "  $port_mountd (TCP and UDP)"
+    log "  $port_lockd (TCP and UDP)"
   fi
 }
 
